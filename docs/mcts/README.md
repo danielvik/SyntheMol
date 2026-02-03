@@ -3,6 +3,10 @@
 This directory contains instructions for reproducing the results from the paper [Generative AI for designing and validating easily synthesizable and structurally novel antibiotics](https://www.nature.com/articles/s42256-024-00809-7), which uses the Monte Carlo
 tree search (MCTS) version of SyntheMol.
 
+**Chemprop v2 note:** The instructions in this folder reference Chemprop v1 CLI commands. If you are using Chemprop
+v2.2.2 (the default for this repo), replace `chemprop_train`/`chemprop_predict` with `chemprop train`/`chemprop predict`,
+and convert any v1 checkpoints using `chemprop convert --conversion v1_to_v2`.
+
 ## Data
 
 The relevant data should be downloaded from [this Zenodo record](https://zenodo.org/doi/10.5281/zenodo.10257838),

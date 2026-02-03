@@ -32,6 +32,7 @@ def train(
     epochs: int = 30,
     num_workers: int = 0,
     use_gpu: bool = False,
+    chemprop_version: str | None = None,
 ) -> None:
     """Trains a machine learning property prediction model.
 
@@ -116,6 +117,7 @@ def train(
                 save_path=save_dir / f"model_{model_num}.pt",
                 num_workers=num_workers,
                 use_gpu=use_gpu,
+                chemprop_version=chemprop_version,
             )
 
             print(model)
@@ -126,6 +128,7 @@ def train(
                 smiles=test_data[smiles_column],
                 fingerprints=test_fingerprints,
                 num_workers=num_workers,
+                chemprop_version=chemprop_version,
             )
         else:
             # Train and save sklearn model

@@ -3,6 +3,10 @@
 Below are instruments for reproducing the results from the paper [SyntheMol-RL: a flexible reinforcement learning framework for designing novel and synthesizable antibiotics](https://www.biorxiv.org/content/10.1101/2025.05.17.654017v1), which uses the reinforcement learning (
 RL) version of SyntheMol.
 
+**Chemprop v2 note:** The instructions in this folder reference Chemprop v1 CLI commands. If you are using Chemprop
+v2.2.2 (the default for this repo), replace `chemprop_train`/`chemprop_predict` with `chemprop train`/`chemprop predict`,
+and convert any v1 checkpoints using `chemprop convert --conversion v1_to_v2`.
+
 ## Data
 
 The relevant data should be downloaded to `SyntheMol/data`. This can be done as follows:

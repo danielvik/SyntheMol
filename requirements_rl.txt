@@ -1,5 +1,5 @@
 chemfunc==1.0.12
-chemprop==1.6.1
+chemprop==2.2.2
 descriptastorus==2.6.1
 gdown==4.7.1
 matplotlib==3.8.1

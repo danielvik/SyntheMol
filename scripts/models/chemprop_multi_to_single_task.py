@@ -3,16 +3,27 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch.nn as nn
-from chemprop.utils import load_args, load_checkpoint, load_scalers, save_checkpoint
 from tqdm import tqdm
 
 
-def chemprop_multi_to_single_task(model_path: Path, save_dir: Path,) -> None:
+def chemprop_multi_to_single_task(
+    model_path: Path,
+    save_dir: Path,
+    chemprop_version: str | None = None,
+) -> None:
     """Converts a Chemprop multi-task model to a series of single-task models.
 
     :param model_path: The path to the Chemprop multi-task model or directory of multi-task models.
     :param save_dir: The directory to save the single-task models to.
+    :param chemprop_version: Chemprop API version. Only v1 is supported by this script.
     """
+    if chemprop_version is not None and str(chemprop_version).lower().startswith("v2"):
+        raise NotImplementedError(
+            "Chemprop v2 models should be converted using the Chemprop CLI "
+            "(e.g., `chemprop convert --conversion v1_to_v2`)."
+        )
+
+    from chemprop.utils import load_args, load_checkpoint, load_scalers, save_checkpoint
     # Get model paths
     if model_path.is_dir():
         model_paths = sorted(path for path in model_path.glob("**/*.pt"))

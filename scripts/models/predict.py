@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import torch
 from chemfunc import compute_fingerprints
-from chemprop.data import set_cache_graph, set_cache_mol
 from tqdm import tqdm
 
 from chemprop_models import chemprop_predict
@@ -25,6 +24,7 @@ def predict(
     num_workers: int = 0,
     use_gpu: bool = False,
     no_cache: bool = False,
+    chemprop_version: str | None = None,
 ) -> None:
     """Make predictions with a model or ensemble of models and save them to a file.
 
@@ -42,9 +42,13 @@ def predict(
         Turn off caching when making predictions on large datasets
     """
     # Disable Chemprop caching for prediction to avoid memory issues with large datasets
-    if no_cache:
-        set_cache_graph(False)
-        set_cache_mol(False)
+    if no_cache and model_type == "chemprop":
+        version = (chemprop_version or "v2").lower()
+        if version.startswith("v1") or version.startswith("1"):
+            from chemprop.data import set_cache_graph, set_cache_mol
+
+            set_cache_graph(False)
+            set_cache_mol(False)
 
     # Load SMILES
     data = pd.read_csv(data_path)
@@ -86,7 +90,9 @@ def predict(
             torch.use_deterministic_algorithms(True)
 
         models = [
-            chemprop_load(model_path=model_path, device=device)
+            chemprop_load(
+                model_path=model_path, device=device, chemprop_version=chemprop_version
+            )
             for model_path in model_paths
         ]
     else:
@@ -101,6 +107,7 @@ def predict(
                     smiles=smiles,
                     fingerprints=fingerprints,
                     num_workers=num_workers,
+                    chemprop_version=chemprop_version,
                 )
                 for model in tqdm(models, desc="models")
             ]

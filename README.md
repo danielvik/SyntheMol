@@ -130,6 +130,11 @@ these types of models:
 3. **MLP-RDKit:** a feed-forward neural network using 200 RDKit molecular features
 4. **Random forest:** a scikit-learn random forest model trained on 200 RDKit molecular features (SyntheMol-MCTS only)
 
+**Chemprop v2 note:** This repo now targets Chemprop v2.2.2 by default. The Chemprop CLI changed from
+`chemprop_train`/`chemprop_predict` (v1) to `chemprop train`/`chemprop predict` (v2), and v1 checkpoints must be
+converted with `chemprop convert --conversion v1_to_v2`. The example commands below are in the older v1 style and
+should be updated to the v2 CLI if you are running Chemprop v2.
+
 ### Train model
 
 All model types can be trained using [Chemprop](https://github.com/chemprop/chemprop), which is installed along

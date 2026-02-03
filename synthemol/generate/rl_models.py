@@ -41,6 +41,7 @@ class RLModel(ABC):
         device: torch.device = torch.device("cpu"),
         extended_evaluation: bool = False,
         h2o_solvents: bool = False,
+        chemprop_version: str | None = None,
     ) -> None:
         """Initializes the model.
 
@@ -86,6 +87,7 @@ class RLModel(ABC):
         self.device = device
         self.extended_evaluation = extended_evaluation
         self.h2o_solvents = h2o_solvents
+        self.chemprop_version = chemprop_version
 
         self.train_source_nodes: list[Node] = []
         self.train_target_nodes: list[Node] = []
@@ -941,6 +943,7 @@ class RLModelChemprop(RLModel):
         device: torch.device = torch.device("cpu"),
         extended_evaluation: bool = False,
         h2o_solvents: bool = False,
+        chemprop_version: str | None = None,
     ) -> None:
         """Initializes the RL Chemprop model.
 
@@ -975,6 +978,7 @@ class RLModelChemprop(RLModel):
             device=device,
             extended_evaluation=extended_evaluation,
             h2o_solvents=h2o_solvents,
+            chemprop_version=chemprop_version,
         )
 
     def build_model(self, prediction_type: RL_PREDICTION_TYPES) -> MoleculeModel:
@@ -987,6 +991,7 @@ class RLModelChemprop(RLModel):
             dataset_type=prediction_type,
             features_type=self.features_type,
             property_name="rl_objective",
+            chemprop_version=self.chemprop_version,
         ).to(self.device)
 
     def load_model(
@@ -998,7 +1003,9 @@ class RLModelChemprop(RLModel):
         :param prediction_type: The type of prediction made by the RL model, which determines the loss function.
         :return: A model with pretrained weights.
         """
-        return chemprop_load(model_path=model_path, device=self.device)
+        return chemprop_load(
+            model_path=model_path, device=self.device, chemprop_version=self.chemprop_version
+        )
 
     def run_model(
         self,

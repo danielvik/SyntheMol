@@ -1,28 +1,43 @@
 """Contains training and predictions functions for Chemprop models."""
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
-from chemprop.args import TrainArgs
-from chemprop.models import MoleculeModel
-from chemprop.utils import load_checkpoint, load_scalers
 from sklearn.preprocessing import StandardScaler
-from synthemol.constants import FEATURES_SIZE_MAPPING, H2O_FEATURES
+
+from synthemol.constants import CHEMPROP_VERSIONS, FEATURES_SIZE_MAPPING, H2O_FEATURES
 
 
-def chemprop_build_model(
+def _normalize_chemprop_version(chemprop_version: CHEMPROP_VERSIONS | str | None) -> CHEMPROP_VERSIONS:
+    if chemprop_version is None:
+        return "v2"
+
+    version = str(chemprop_version).lower().strip()
+    if version in {"v1", "1", "1.x", "1.6.1"}:
+        return "v1"
+    if version in {"v2", "2", "2.x", "2.2.2"}:
+        return "v2"
+
+    raise ValueError(
+        f"Unsupported chemprop_version={chemprop_version!r}. Expected 'v1' or 'v2'."
+    )
+
+
+# ----------------------------
+# Chemprop v1 implementations
+# ----------------------------
+
+def _chemprop_build_model_v1(
     dataset_type: str,
     features_type: str | None = None,
     property_name: str = "task",
-) -> MoleculeModel:
-    """Builds a Chemprop model.
+):
+    from chemprop.args import TrainArgs
+    from chemprop.models import MoleculeModel
 
-    :param dataset_type: The type of dataset (classification or regression).
-    :param features_type: The type of features (rdkit, morgan, or none).
-    :param rdkit_features_size: The size of the RDKit features vector.
-    :param property_name: The name of the property being predicted.
-    :return: A Chemprop model.
-    """
     arg_list = [
         "--data_path",
         "foo.csv",
@@ -39,7 +54,7 @@ def chemprop_build_model(
             "rdkit_2d_normalized",
             "--no_features_scaling",
         ]
-    
+
     if features_type == "morgan":
         arg_list += [
             "--features_generator",
@@ -53,89 +68,243 @@ def chemprop_build_model(
     if features_type is not None:
         args.features_size = FEATURES_SIZE_MAPPING[features_type]
 
-    # Ensure reproducibility
     torch.manual_seed(0)
 
-    # Build model
-    model = MoleculeModel(args)
-
-    return model
+    return MoleculeModel(args)
 
 
-def chemprop_load(
-    model_path: Path, device: torch.device = torch.device("cpu")
-) -> MoleculeModel:
-    """Loads a Chemprop model.
+def _chemprop_load_v1(model_path: Path, device: torch.device) -> Any:
+    from chemprop.utils import load_checkpoint
 
-    :param model_path: A path to a Chemprop model.
-    :param device: The device on which to load the model.
-    :return: A Chemprop model.
-    """
     return load_checkpoint(path=str(model_path), device=device).eval()
 
 
-def chemprop_load_scaler(model_path: Path) -> StandardScaler:
-    """Loads a Chemprop model's data scaler.
+def _chemprop_load_scaler_v1(model_path: Path) -> StandardScaler:
+    from chemprop.utils import load_scalers
 
-    :param model_path: A path to a Chemprop model.
-    :return: A data scaler.
-    """
     return load_scalers(path=str(model_path))[0]
 
 
-def chemprop_predict_on_molecule(
-    model: MoleculeModel,
+def _chemprop_predict_on_molecule_v1(
+    model: Any,
     smiles: str,
     fingerprint: np.ndarray | None = None,
     scaler: StandardScaler | None = None,
     h2o_solvents: bool = False,
 ) -> float:
-    """Predicts the property of a molecule using a Chemprop model.
-
-    :param model: A Chemprop model.
-    :param smiles: A SMILES string.
-    :param fingerprint: A 1D array of molecular fingerprints (if applicable).
-    :param scaler: A data scaler (if applicable).
-    :return: The prediction on the molecule.
-    """
-    # Set up optional extra features
     extra_features = H2O_FEATURES if h2o_solvents else []
 
-    # Make prediction
     pred = model(
         batch=[[smiles]],
-        features_batch=[np.concatenate((fingerprint, extra_features), axis=0)] if fingerprint is not None else None,
+        features_batch=[np.concatenate((fingerprint, extra_features), axis=0)]
+        if fingerprint is not None
+        else None,
     ).item()
 
-    # Scale prediction if applicable
     if scaler is not None:
         pred = scaler.inverse_transform([[pred]])[0][0]
 
     return float(pred)
 
 
+# ----------------------------
+# Chemprop v2 implementations
+# ----------------------------
+
+def _chemprop_build_model_v2(
+    dataset_type: str,
+    features_type: str | None = None,
+    property_name: str = "task",
+):
+    # NOTE: property_name is currently unused in v2 model construction.
+    from chemprop import models, nn
+
+    # Message passing and aggregation use Chemprop defaults.
+    message_passing = nn.BondMessagePassing()
+    aggregation = nn.MeanAggregation()
+
+    # Determine input dimension for the predictor when using extra descriptors.
+    input_dim = None
+    if features_type is not None:
+        features_size = FEATURES_SIZE_MAPPING[features_type]
+        # Chemprop v2 defaults to hidden dim = 300; we use that as the base.
+        # This keeps behavior consistent with v1 while supporting concatenated descriptors.
+        input_dim = 300 + features_size
+
+    if dataset_type == "classification":
+        if input_dim is None:
+            predictor = nn.BinaryClassificationFFN(n_tasks=1)
+        else:
+            predictor = nn.BinaryClassificationFFN(n_tasks=1, input_dim=input_dim)
+        metrics = None
+    elif dataset_type == "regression":
+        if input_dim is None:
+            predictor = nn.RegressionFFN(n_tasks=1)
+        else:
+            predictor = nn.RegressionFFN(n_tasks=1, input_dim=input_dim)
+        metrics = None
+    else:
+        raise ValueError(f"Dataset type {dataset_type} is not supported.")
+
+    if metrics is None:
+        model = models.MPNN(message_passing, aggregation, predictor)
+    else:
+        model = models.MPNN(message_passing, aggregation, predictor, metrics=metrics)
+
+    return model
+
+
+def _chemprop_load_v2(model_path: Path, device: torch.device) -> Any:
+    from chemprop.models import MPNN
+
+    model = MPNN.load_from_file(model_path)
+    model = model.to(device)
+    model.eval()
+    return model
+
+
+def _chemprop_predict_on_molecule_v2(
+    model: Any,
+    smiles: str,
+    fingerprint: np.ndarray | None = None,
+    h2o_solvents: bool = False,
+) -> float:
+    from chemprop import data, featurizers
+
+    # Assemble optional descriptor features
+    if fingerprint is not None:
+        extra_features = H2O_FEATURES if h2o_solvents else []
+        x_d = np.concatenate((fingerprint, extra_features), axis=0).astype(np.float32)
+    else:
+        x_d = None
+
+    datapoint = data.MoleculeDatapoint.from_smi(smiles, y=None, x_d=x_d)
+    dataset = data.MoleculeDataset([datapoint], featurizer=featurizers.SimpleMoleculeMolGraphFeaturizer())
+    dataloader = data.build_dataloader(dataset, batch_size=1, shuffle=False, num_workers=0)
+
+    batch = next(iter(dataloader))
+    bmg, V_d, X_d, *_ = batch
+
+    with torch.inference_mode():
+        preds = model(bmg, V_d, X_d)
+
+    return float(preds.squeeze().item())
+
+
+# ----------------------------
+# Public API (versioned)
+# ----------------------------
+
+def chemprop_build_model(
+    dataset_type: str,
+    features_type: str | None = None,
+    property_name: str = "task",
+    chemprop_version: CHEMPROP_VERSIONS | str | None = None,
+) -> Any:
+    """Builds a Chemprop model for v1 or v2."""
+    version = _normalize_chemprop_version(chemprop_version)
+    if version == "v1":
+        return _chemprop_build_model_v1(
+            dataset_type=dataset_type,
+            features_type=features_type,
+            property_name=property_name,
+        )
+
+    return _chemprop_build_model_v2(
+        dataset_type=dataset_type,
+        features_type=features_type,
+        property_name=property_name,
+    )
+
+
+def chemprop_load(
+    model_path: Path, device: torch.device = torch.device("cpu"), chemprop_version: CHEMPROP_VERSIONS | str | None = None
+) -> Any:
+    """Loads a Chemprop model for v1 or v2."""
+    version = _normalize_chemprop_version(chemprop_version)
+    if version == "v1":
+        return _chemprop_load_v1(model_path=model_path, device=device)
+
+    return _chemprop_load_v2(model_path=model_path, device=device)
+
+
+def chemprop_load_scaler(
+    model_path: Path, chemprop_version: CHEMPROP_VERSIONS | str | None = None
+) -> StandardScaler | None:
+    """Loads a Chemprop scaler for v1; returns None for v2."""
+    version = _normalize_chemprop_version(chemprop_version)
+    if version == "v1":
+        return _chemprop_load_scaler_v1(model_path=model_path)
+
+    return None
+
+
+def chemprop_predict_on_molecule(
+    model: Any,
+    smiles: str,
+    fingerprint: np.ndarray | None = None,
+    scaler: StandardScaler | None = None,
+    h2o_solvents: bool = False,
+    chemprop_version: CHEMPROP_VERSIONS | str | None = None,
+) -> float:
+    """Predicts a property value for a single molecule."""
+    version = _normalize_chemprop_version(chemprop_version)
+    if version == "v1":
+        return _chemprop_predict_on_molecule_v1(
+            model=model,
+            smiles=smiles,
+            fingerprint=fingerprint,
+            scaler=scaler,
+            h2o_solvents=h2o_solvents,
+        )
+
+    return _chemprop_predict_on_molecule_v2(
+        model=model,
+        smiles=smiles,
+        fingerprint=fingerprint,
+        h2o_solvents=h2o_solvents,
+    )
+
+
 def chemprop_predict_on_molecule_ensemble(
-    models: list[MoleculeModel],
+    models: list[Any],
     smiles: str,
     fingerprint: np.ndarray | None = None,
     scalers: list[StandardScaler] | None = None,
     h2o_solvents: bool = False,
+    chemprop_version: CHEMPROP_VERSIONS | str | None = None,
 ) -> float:
-    """Predicts the property of a molecule using an ensemble of Chemprop models.
+    """Predicts a property value for a single molecule using an ensemble."""
+    version = _normalize_chemprop_version(chemprop_version)
+    if version == "v1":
+        if scalers is None:
+            scalers = [None] * len(models)
 
-    :param models: An ensemble of Chemprop models.
-    :param smiles: A SMILES string.
-    :param fingerprint: A 1D array of molecular fingerprints (if applicable).
-    :param scalers: An ensemble of data scalers (if applicable).
-    :return: The ensemble prediction on the molecule.
-    """
+        return float(
+            np.mean(
+                [
+                    _chemprop_predict_on_molecule_v1(
+                        model=model,
+                        smiles=smiles,
+                        fingerprint=fingerprint,
+                        scaler=scaler,
+                        h2o_solvents=h2o_solvents,
+                    )
+                    for model, scaler in zip(models, scalers)
+                ]
+            )
+        )
+
     return float(
         np.mean(
             [
-                chemprop_predict_on_molecule(
-                    model=model, smiles=smiles, fingerprint=fingerprint, scaler=scaler, h2o_solvents=h2o_solvents,
+                _chemprop_predict_on_molecule_v2(
+                    model=model,
+                    smiles=smiles,
+                    fingerprint=fingerprint,
+                    h2o_solvents=h2o_solvents,
                 )
-                for model, scaler in zip(models, scalers)
+                for model in models
             ]
         )
     )
