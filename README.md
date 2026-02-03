@@ -70,8 +70,8 @@ training and prediction of the underlying bioactivity prediction model (Chemprop
 Optionally, create a conda environment.
 
 ```bash
-conda create -y -n synthemol python=3.11
-conda activate synthemol
+conda create -y -n synthemol-v2 python=3.11
+conda activate synthemol-v2
 ```
 
 Install SyntheMol via pip.
@@ -103,6 +103,14 @@ SyntheMol-MCTS
 ```bash
 pip install -r requirements_mcts.txt
 pip install -e .
+```
+
+### Smoke test (Chemprop v2)
+
+After installing dependencies, you can run a quick smoke test to verify the Chemprop v2 integration.
+
+```bash
+python scripts/tests/smoke_chemprop_v2.py
 ```
 
 **Note:** If you get the

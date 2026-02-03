@@ -241,3 +241,12 @@ I implemented Plan B (dual-stack) with v2 as the default path and a best-effort 
 
 Next step if we want to tighten correctness: add a small smoke test that trains/predicts with v2 and validates output ranges, then optimize v2 per-molecule inference caching.
 
+
+## Smoke test + env status (2026-02-03)
+
+- Smoke test script added: `scripts/tests/smoke_chemprop_v2.py`.
+- README updated to reference the `synthemol-v2` conda env and the smoke test command.
+- Conda environment creation started with `conda create -y -n synthemol-v2 python=3.11` but timed out during metadata collection. No env confirmed as created yet.
+
+To resume: rerun the conda creation (possibly with a longer timeout or `conda config --set channel_priority strict`), then install deps (`pip install -r requirements_rl.txt`, `pip install -e .`) and run the smoke test.
+
