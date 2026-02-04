@@ -214,9 +214,18 @@ def _chemprop_predict_v2(
     preds = []
     with torch.inference_mode():
         for batch in dataloader:
-            bmg, V_d, X_d, *_ = batch
+            if hasattr(batch, "bmg"):
+                bmg = batch.bmg
+                V_d = batch.V_d
+                X_d = batch.X_d
+            else:
+                bmg, V_d, X_d, *_ = batch
+            if bmg is None:
+                raise RuntimeError("Chemprop batch missing molecular graph (bmg).")
             if hasattr(bmg, "to"):
-                bmg = bmg.to(device)
+                moved = bmg.to(device)
+                if moved is not None:
+                    bmg = moved
             if V_d is not None:
                 V_d = V_d.to(device)
             if X_d is not None:
@@ -242,12 +251,10 @@ def _chemprop_train_v2(
     num_workers: int = 0,
     use_gpu: bool = False,
 ) -> Any:
-    from chemprop import data, featurizers
+    from chemprop import data, featurizers, nn, models
     from lightning.pytorch import Trainer, seed_everything
     from lightning.pytorch.callbacks import ModelCheckpoint
     from chemprop.models.utils import save_model
-
-    from synthemol.models import chemprop_build_model
 
     seed_everything(0, workers=True)
 
@@ -277,12 +284,20 @@ def _chemprop_train_v2(
         val_dataset, batch_size=min(50, len(val_smiles)), shuffle=False, num_workers=num_workers
     )
 
-    model = chemprop_build_model(
-        dataset_type=dataset_type,
-        features_type=fingerprint_type,
-        property_name=property_name,
-        chemprop_version="v2",
-    )
+    message_passing = nn.BondMessagePassing()
+    aggregation = nn.MeanAggregation()
+    input_dim = None
+    if fingerprint_type is not None:
+        input_dim = 300 + train_fingerprints.shape[1]
+
+    if dataset_type == "classification":
+        predictor = nn.BinaryClassificationFFN(n_tasks=1, input_dim=input_dim) if input_dim is not None else nn.BinaryClassificationFFN(n_tasks=1)
+    elif dataset_type == "regression":
+        predictor = nn.RegressionFFN(n_tasks=1, input_dim=input_dim) if input_dim is not None else nn.RegressionFFN(n_tasks=1)
+    else:
+        raise ValueError(f"Dataset type {dataset_type} is not supported.")
+
+    model = models.MPNN(message_passing, aggregation, predictor)
 
     checkpoint = ModelCheckpoint(
         dirpath=str(save_path.parent),

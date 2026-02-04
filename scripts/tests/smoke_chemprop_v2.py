@@ -11,6 +11,13 @@ import numpy as np
 import pandas as pd
 from chemfunc import compute_fingerprints
 
+from pathlib import Path as _Path
+import sys as _sys
+
+ROOT = _Path(__file__).resolve().parents[2]
+if str(ROOT) not in _sys.path:
+    _sys.path.insert(0, str(ROOT))
+
 from scripts.models.chemprop_models import chemprop_predict, chemprop_train
 
 

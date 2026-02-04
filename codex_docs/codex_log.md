@@ -250,3 +250,10 @@ Next step if we want to tighten correctness: add a small smoke test that trains/
 
 To resume: rerun the conda creation (possibly with a longer timeout or `conda config --set channel_priority strict`), then install deps (`pip install -r requirements_rl.txt`, `pip install -e .`) and run the smoke test.
 
+
+## Smoke test run (2026-02-03)
+
+- Smoke test executed in `synthemol-v2` and completed successfully after fixing Chemprop v2 batch handling.
+- Output: `Preds shape: (8,)`, `Preds min/max: 0.5030 / 0.5176`, followed by `OK`.
+- Fix applied: In `scripts/models/chemprop_models.py`, avoid overwriting `BatchMolGraph` with `None` when calling `.to(device)`.
+
