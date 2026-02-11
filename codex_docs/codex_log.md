@@ -257,3 +257,29 @@ To resume: rerun the conda creation (possibly with a longer timeout or `conda co
 - Output: `Preds shape: (8,)`, `Preds min/max: 0.5030 / 0.5176`, followed by `OK`.
 - Fix applied: In `scripts/models/chemprop_models.py`, avoid overwriting `BatchMolGraph` with `None` when calling `.to(device)`.
 
+
+## Progress summary (2026-02-03)
+
+### Repo updates for Chemprop v2
+- Added Chemprop version switching (`chemprop_version`) across generation, scoring, RL, and scripts.
+- Implemented v1/v2 adapter in `synthemol/models/chemprop_models.py`.
+- Updated `RLModelChemprop` and `ChempropScorer` to use versioned load/predict/build calls.
+- Rewrote `scripts/models/chemprop_models.py` with v2 training/prediction via Lightning + v1 fallback.
+- Updated `scripts/models/train.py`, `scripts/models/predict.py`, and `scripts/models/chemprop_multi_to_single_task.py`.
+- Bumped Chemprop pin to `2.2.2` in `setup.py`, `requirements_rl.txt`, and `requirements_mcts.txt`.
+- Added Chemprop v2 CLI notes to `README.md`, `docs/rl/README.md`, and `docs/mcts/README.md`.
+
+### Smoke test + environment
+- Added smoke test script: `scripts/tests/smoke_chemprop_v2.py`.
+- Updated README with `synthemol-v2` conda env name and smoke test command.
+- Environment created by user; smoke test executed successfully afterward.
+
+### Bugs encountered and fixes
+- Import path issue in smoke test: added repo root to `sys.path` in `scripts/tests/smoke_chemprop_v2.py`.
+- Chemprop v2 training import error: avoided importing `synthemol.models` in `scripts/models/chemprop_models.py` and built MPNN directly.
+- Chemprop v2 batch handling: `BatchMolGraph.to()` returns `None`; stopped overwriting `bmg` when calling `.to(device)`.
+- Environment dependency: Chemprop v2 required newer `scikit-learn` (for `root_mean_squared_error`). User updated env.
+
+### Smoke test result
+- `Preds shape: (8,)`, `Preds min/max: 0.5030 / 0.5176`, followed by `OK`.
+
