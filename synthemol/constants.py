@@ -34,6 +34,7 @@ MOLECULE_TYPE = str | Mol  # Either a SMILES string or an RDKit Mol object
 SKLEARN_MODEL_TYPES = RandomForestClassifier | RandomForestRegressor
 SKLEARN_MODEL_NAME_TYPES = Literal["random_forest"]
 MODEL_TYPES = Literal["random_forest", "chemprop"]
+CHEMPROP_VERSIONS = Literal["v1", "v2"]
 SCORE_TYPES = Literal["random_forest", "chemprop", "qed", "clogp", "wavelength", "sp2_network"]
 DATASET_TYPES = Literal["classification", "regression"]
 RL_MODEL_TYPES = Literal["mlp", "chemprop"]

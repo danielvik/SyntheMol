@@ -70,8 +70,8 @@ training and prediction of the underlying bioactivity prediction model (Chemprop
 Optionally, create a conda environment.
 
 ```bash
-conda create -y -n synthemol python=3.11
-conda activate synthemol
+conda create -y -n synthemol-v2 python=3.11
+conda activate synthemol-v2
 ```
 
 Install SyntheMol via pip.
@@ -105,6 +105,14 @@ pip install -r requirements_mcts.txt
 pip install -e .
 ```
 
+### Smoke test (Chemprop v2)
+
+After installing dependencies, you can run a quick smoke test to verify the Chemprop v2 integration.
+
+```bash
+python scripts/tests/smoke_chemprop_v2.py
+```
+
 **Note:** If you get the
 issue `ImportError: libXrender.so.1: cannot open shared object file: No such file or directory`,
 run `conda install -c conda-forge xorg-libxrender`.
@@ -129,6 +137,11 @@ these types of models:
 2. **Chemprop-RDKit:** Chemprop augmented with 200 RDKit molecular features
 3. **MLP-RDKit:** a feed-forward neural network using 200 RDKit molecular features
 4. **Random forest:** a scikit-learn random forest model trained on 200 RDKit molecular features (SyntheMol-MCTS only)
+
+**Chemprop v2 note:** This repo now targets Chemprop v2.2.2 by default. The Chemprop CLI changed from
+`chemprop_train`/`chemprop_predict` (v1) to `chemprop train`/`chemprop predict` (v2), and v1 checkpoints must be
+converted with `chemprop convert --conversion v1_to_v2`. The example commands below are in the older v1 style and
+should be updated to the v2 CLI if you are running Chemprop v2.
 
 ### Train model
 

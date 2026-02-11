@@ -152,6 +152,7 @@ class ChempropScorer(Scorer):
         fingerprint_type: FINGERPRINT_TYPES | None = None,
         device: torch.device = torch.device("cpu"),
         h2o_solvents: bool = False,
+        chemprop_version: str | None = None,
     ) -> None:
         """Initialize the scorer.
 
@@ -182,13 +183,21 @@ class ChempropScorer(Scorer):
         if device.type == "cpu":
             torch.use_deterministic_algorithms(True)
 
+        # Save Chemprop version
+        self.chemprop_version = chemprop_version
+
         # Load models
         self.models = [
-            chemprop_load(model_path=model_path, device=device)
+            chemprop_load(
+                model_path=model_path, device=device, chemprop_version=chemprop_version
+            )
             for model_path in model_paths
         ]
         self.scalers = [
-            chemprop_load_scaler(model_path=model_path) for model_path in model_paths
+            chemprop_load_scaler(
+                model_path=model_path, chemprop_version=chemprop_version
+            )
+            for model_path in model_paths
         ]
 
     def __call__(self, smiles: str) -> float:
@@ -212,6 +221,7 @@ class ChempropScorer(Scorer):
             fingerprint=fingerprint,
             scalers=self.scalers,
             h2o_solvents=self.h2o_solvents,
+            chemprop_version=self.chemprop_version,
         )
 
 class WaveLengthScorer(ChempropScorer):
@@ -223,12 +233,14 @@ class WaveLengthScorer(ChempropScorer):
         wavelength_min: int = 420,
         wavelength_max: int = 750,
         h2o_solvents: bool = False,
+        chemprop_version: str | None = None,
     ) -> None:
         super().__init__(
             model_path=model_path,
             fingerprint_type=fingerprint_type,
             device=device,
             h2o_solvents=h2o_solvents,
+            chemprop_version=chemprop_version,
         )
         self.wavelength_min = wavelength_min
         self.wavelength_max = wavelength_max
@@ -251,6 +263,7 @@ def create_scorer(
     device: torch.device = torch.device("cpu"),
     wavelength_color: WAVELENGTH_COLORS | None = None,
     h2o_solvents: bool = False,
+    chemprop_version: str | None = None,
 ) -> Scorer:
     """Creates a scorer object that scores a molecule.
 
@@ -294,17 +307,17 @@ def create_scorer(
         if model_path is None:
             raise ValueError("Wavelength requires a model path.")
         if wavelength_color is None:
-            scorer = WaveLengthScorer(model_path=model_path, fingerprint_type=fingerprint_type, device=device, h2o_solvents=h2o_solvents)
+            scorer = WaveLengthScorer(model_path=model_path, fingerprint_type=fingerprint_type, device=device, h2o_solvents=h2o_solvents, chemprop_version=chemprop_version)
         else:
             wavelength_min, wavelength_max = WAVELENGTH_DICT[wavelength_color]
-            scorer = WaveLengthScorer(model_path=model_path, fingerprint_type=fingerprint_type, device=device, wavelength_min=wavelength_min, wavelength_max=wavelength_max, h2o_solvents=h2o_solvents)
+            scorer = WaveLengthScorer(model_path=model_path, fingerprint_type=fingerprint_type, device=device, wavelength_min=wavelength_min, wavelength_max=wavelength_max, h2o_solvents=h2o_solvents, chemprop_version=chemprop_version)
 
     elif score_type == "chemprop":
         if model_path is None:
             raise ValueError("Chemprop requires a model path.")
 
         scorer = ChempropScorer(
-            model_path=model_path, fingerprint_type=fingerprint_type, device=device, h2o_solvents=h2o_solvents
+            model_path=model_path, fingerprint_type=fingerprint_type, device=device, h2o_solvents=h2o_solvents, chemprop_version=chemprop_version
         )
     elif score_type == "random_forest":
         if model_path is None:
@@ -331,6 +344,7 @@ class MoleculeScorer:
         device: torch.device = torch.device("cpu"),
         smiles_to_scores: dict[str, list[float]] | None = None,
         wavelength_color: str | None = None,
+        chemprop_version: str | None = None,
     ) -> None:
         """Initialize the MoleculeScorer, which contains a collection of one or more individual scorers.
 
@@ -353,6 +367,7 @@ class MoleculeScorer:
         # Save parameters
         self.score_weights = score_weights
         self.smiles_to_individual_scores = smiles_to_scores
+        self.chemprop_version = chemprop_version
 
         # Handle None model_paths and fingerprint_types
         if model_paths is None:
@@ -370,6 +385,7 @@ class MoleculeScorer:
                 device=device,
                 wavelength_color=wavelength_color,
                 h2o_solvents=h2o_solvents,
+                chemprop_version=chemprop_version,
             )
             for score_type, model_path, fingerprint_type in zip(
                 score_types, model_paths, fingerprint_types

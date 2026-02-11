@@ -82,6 +82,7 @@ def generate(
     wandb_run_name: str | None = None,
     wavelength_color: str | None = None, 
     h2o_solvents: bool = False,
+    chemprop_version: str | None = None,
 ) -> None:
     """Generate molecules combinatorially using a search guided by a molecular property predictor.
 
@@ -152,6 +153,7 @@ def generate(
     :param wandb_run_name: The name of the Weights & Biases run to log results to.
     :param wavelength color: If generating fluorescent molecules, then specify a color to target a specific wavelength, otherwise the whole visible range is targeted if None.
     :param h2o_solvents: Whether to concatenate H2O solvent features with the molecule features during prediction.
+    :param chemprop_version: Which Chemprop API to use ("v1" or "v2"). Defaults to v2 when None.
     """
     # Convert score_model_paths to Path/None
     # TODO: change tapify to allow list[Path | Literal["None"] | None]
@@ -490,7 +492,8 @@ def generate(
         h2o_solvents=h2o_solvents,
         device=device,
         smiles_to_scores=building_block_smiles_to_scores,
-        wavelength_color = wavelength_color
+        wavelength_color = wavelength_color,
+        chemprop_version=chemprop_version,
     )
 
     # Set up RL model if applicable
@@ -510,6 +513,7 @@ def generate(
             "features_type": rl_model_fingerprint_type,
             "features_size": FEATURES_SIZE_MAPPING[rl_model_fingerprint_type],
             "h2o_solvents": h2o_solvents,
+            "chemprop_version": chemprop_version,
         }
 
         # Select RL model class and update RL model args

@@ -1,5 +1,5 @@
 chemfunc==1.0.4
-chemprop==1.5.2
+chemprop==2.2.2
 descriptastorus==2.6.0
 matplotlib==3.7.1
 networkx==3.1
