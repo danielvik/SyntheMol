@@ -5,6 +5,7 @@
 #SBATCH --cpus-per-task=20
 #SBATCH --partition=normal
 #SBATCH --nodelist=dkcn-papp-nudk2
+####### --gres=gpu:1
 #SBATCH --output=slurm-%x-%j.out
 
 set -euo pipefail
@@ -29,7 +30,7 @@ cd "${workdir}"
 SCORE_MODEL_PATH=${SCORE_MODEL_PATH:-/compchem/arc/users/dvik/repos/del-deseq2/delqsar_outputs/model_checkpoints/155486_6653_fine_tuning/best-epoch=5-val_loss=0.45.ckpt}
 BUILDING_BLOCKS_PATH=${BUILDING_BLOCKS_PATH:-/compchem/arc/users/dvik/repos/SyntheMol/delqsar_real_preds.csv}
 BUILDING_BLOCKS_SCORE_COLUMN=${BUILDING_BLOCKS_SCORE_COLUMN:-pred_0}
-N_ROLLOUT=${N_ROLLOUT:-10}
+N_ROLLOUT=${N_ROLLOUT:-1000}
 CHEMICAL_SPACES=${CHEMICAL_SPACES:-real}
 RL_PREDICTION_TYPES=${RL_PREDICTION_TYPES:-regression}
 STATUS_LOG_FREQUENCY=${STATUS_LOG_FREQUENCY:-10}
@@ -68,6 +69,7 @@ synthemol \
   --rl_model_type chemprop \
   --rl_prediction_types "${RL_PREDICTION_TYPES}" \
   --chemprop_version v2 \
+  --use_gpu \
   --status_log_frequency "${STATUS_LOG_FREQUENCY}"
 
 end_time=$(date +%s)

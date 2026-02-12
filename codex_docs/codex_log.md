@@ -402,3 +402,18 @@ Added a cluster submission script for the Chemprop v2 RL run:
 ### Example override
 - `sbatch --export=ALL,N_ROLLOUT=100,STATUS_LOG_FREQUENCY=5 scripts/slurm/run_synthemol_delqsar_rl.sh`
 
+
+## SLURM GPU update (2026-02-12)
+
+Updated `scripts/slurm/run_synthemol_delqsar_rl.sh` to run on GPU.
+
+### Changes
+- Added GPU resource request in SLURM header:
+  - `#SBATCH --gres=gpu:1`
+- Enabled CUDA execution in `synthemol` command:
+  - added `--use_gpu`
+
+### Validation
+- Script syntax check passed:
+  - `bash -n scripts/slurm/run_synthemol_delqsar_rl.sh`
+

@@ -143,3 +143,5 @@ dmypy.json
 # Weights & Biases
 wandb
 runs/*
+delqsar_real_preds.csv
+/slurm-*.out
