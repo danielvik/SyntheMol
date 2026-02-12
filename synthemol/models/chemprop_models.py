@@ -157,7 +157,10 @@ def _chemprop_build_model_v2(
 def _chemprop_load_v2(model_path: Path, device: torch.device) -> Any:
     from chemprop.models import MPNN
 
-    model = MPNN.load_from_file(model_path)
+    if model_path.suffix == ".ckpt":
+        model = MPNN.load_from_checkpoint(model_path)
+    else:
+        model = MPNN.load_from_file(model_path)
     model = model.to(device)
     model.eval()
     return model
@@ -183,10 +186,23 @@ def _chemprop_predict_on_molecule_v2(
     dataloader = data.build_dataloader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
     batch = next(iter(dataloader))
-    bmg, V_d, X_d, *_ = batch
+    if hasattr(batch, "bmg"):
+        bmg = batch.bmg
+        v_d = batch.V_d
+        x_d = batch.X_d
+    else:
+        bmg, v_d, x_d, *_ = batch
+
+    moved = bmg.to(next(model.parameters()).device) if hasattr(bmg, "to") else bmg
+    if moved is not None:
+        bmg = moved
+    if v_d is not None:
+        v_d = v_d.to(next(model.parameters()).device)
+    if x_d is not None:
+        x_d = x_d.to(next(model.parameters()).device)
 
     with torch.inference_mode():
-        preds = model(bmg, V_d, X_d)
+        preds = model(bmg, v_d, x_d)
 
     return float(preds.squeeze().item())
 

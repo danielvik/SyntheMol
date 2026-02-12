@@ -162,7 +162,9 @@ class ChempropScorer(Scorer):
         """
         # Get model paths
         if model_path.is_dir():
-            model_paths = list(model_path.glob("**/*.pt"))
+            model_paths = list(model_path.glob("**/*.pt")) + list(
+                model_path.glob("**/*.ckpt")
+            )
 
             if len(model_paths) == 0:
                 raise ValueError(

@@ -74,6 +74,7 @@ def generate(
     no_building_block_diversity: bool = False,
     store_nodes: bool = False,
     save_frequency: int = 1000,
+    status_log_frequency: int = 10,
     verbose: bool = False,
     replicate_mcts: bool = False,
     replicate_rl: bool = False,
@@ -143,6 +144,7 @@ def generate(
         This doubles the speed of the search but significantly increases
         the memory usage (e.g., 450 GB for 20,000 rollouts instead of 600 MB).
     :param save_frequency: The number of rollouts between each save of the generated molecules.
+    :param status_log_frequency: Number of rollouts between status log entries to stdout and run.log.
     :param verbose: Whether to print out additional information during generation.
     :param replicate_mcts: This is necessary to replicate the results from the  MCTS paper
         but otherwise should not be used since it limits the potential choices of building blocks.
@@ -337,6 +339,19 @@ def generate(
     ) in chemical_space_to_building_block_data.items():
         print(f"Loaded {len(building_block_data):,} {chemical_space} building blocks")
 
+        required_columns = {
+            building_blocks_smiles_column,
+            building_blocks_id_column,
+            *building_blocks_score_columns,
+        }
+        missing_columns = sorted(required_columns - set(building_block_data.columns))
+        if missing_columns:
+            raise ValueError(
+                f"Building blocks file for chemical space '{chemical_space}' is missing "
+                f"required columns: {missing_columns}. "
+                f"Expected at least {sorted(required_columns)}."
+            )
+
         if building_block_data[building_blocks_id_column].nunique() != len(
             building_block_data
         ):
@@ -511,7 +526,11 @@ def generate(
             "device": device,
             "extended_evaluation": rl_extended_evaluation,
             "features_type": rl_model_fingerprint_type,
-            "features_size": FEATURES_SIZE_MAPPING[rl_model_fingerprint_type],
+            "features_size": (
+                FEATURES_SIZE_MAPPING[rl_model_fingerprint_type]
+                if rl_model_fingerprint_type is not None
+                else 0
+            ),
             "h2o_solvents": h2o_solvents,
             "chemprop_version": chemprop_version,
         }
@@ -557,6 +576,8 @@ def generate(
         wandb_log=wandb_log,
         wavelength_color=wavelength_color,
         log_path=save_dir / "logs.pkl",
+        status_log_path=save_dir / "run.log",
+        status_log_frequency=status_log_frequency,
     )
 
     # Search for molecules

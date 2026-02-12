@@ -7,8 +7,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from chemfunc.molecular_fingerprints import compute_fingerprints
-from chemprop.models import MoleculeModel
-from chemprop.features import BatchMolGraph, MolGraph
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error, r2_score
 from tqdm import tqdm, trange
@@ -17,10 +15,6 @@ from synthemol.constants import RL_PREDICTION_TYPES, FINGERPRINT_TYPES, H2O_FEAT
 from synthemol.generate.score_weights import ScoreWeights
 from synthemol.generate.node import Node
 from synthemol.models import chemprop_build_model, chemprop_load, MLP
-
-
-# Caching for Chemprop MolGraphs
-SMILES_TO_MOL_GRAPH = {}
 
 
 class RLModel(ABC):
@@ -105,13 +99,24 @@ class RLModel(ABC):
             ]
         else:
             # Get model path or first model path from each ensemble if the path is not None
-            model_paths = [
-                None
-                if model_path in ("None", None)
-                else Path(model_path) if Path(model_path).is_file() 
-                else sorted(Path(model_path).glob("**/*.pt"))[0]
-                for model_path in model_paths
-            ]
+            resolved_model_paths = []
+            for model_path in model_paths:
+                if model_path in ("None", None):
+                    resolved_model_paths.append(None)
+                    continue
+
+                model_path = Path(model_path)
+                if model_path.is_file():
+                    resolved_model_paths.append(model_path)
+                    continue
+
+                checkpoint_paths = sorted(model_path.glob("**/*.pt")) + sorted(
+                    model_path.glob("**/*.ckpt")
+                )
+                if len(checkpoint_paths) == 0:
+                    raise ValueError(f"Could not find a model checkpoint in {model_path}.")
+                resolved_model_paths.append(checkpoint_paths[0])
+            model_paths = resolved_model_paths
 
             # Load models or build models
             self.models = [
@@ -827,102 +832,56 @@ class RLChempropMoleculeDataset(torch.utils.data.Dataset):
         features: torch.Tensor | None = None,
         rewards: list[list[float]] | None = None,
     ) -> None:
-        """Initializes the dataset.
+        """Initializes a Chemprop v2-compatible dataset.
 
-        :param molecule_tuples: A list of tuples of SMILES strings representing one or more molecules.
-        :param features: A tensor containing the features for each molecule in each tuple of molecules
-            (num_tuples, total_features_size).
-        :param rewards: A list of lists of rewards for each tuple of molecules of shape (num_molecules, num_properties).
+        A tuple of source molecules is represented as a disconnected multi-fragment
+        SMILES string joined by '.' so Chemprop featurization can treat it as one sample.
         """
-        # Store molecule tuples
-        self.molecule_tuples = molecule_tuples
-
-        # Handle features
-        if features is None:
-            self.features = [None] * len(molecule_tuples)
-        else:
-            self.features = features
-
-        # Handle rewards
-        if rewards is None:
-            self.rewards = [None] * len(molecule_tuples)
-        else:
-            self.rewards = rewards
-
-        # Add each molecule to the MolGraph cache
-        for molecule_tuple in tqdm(molecule_tuples, desc="Caching MolGraphs"):
-            for molecule in molecule_tuple:
-                if molecule not in SMILES_TO_MOL_GRAPH:
-                    SMILES_TO_MOL_GRAPH[molecule] = MolGraph(molecule)
-
-        # Get MolGraphs for each molecule
-        self.mol_graphs_tuples = [
-            tuple(SMILES_TO_MOL_GRAPH[molecule] for molecule in molecule_tuple)
-            for molecule_tuple in molecule_tuples
-        ]
+        self.joined_smiles = [".".join(molecule_tuple) for molecule_tuple in molecule_tuples]
+        self.features = [None] * len(molecule_tuples) if features is None else features
+        self.rewards = [None] * len(molecule_tuples) if rewards is None else rewards
 
     def __len__(self) -> int:
         """Returns the number of tuples of molecules."""
-        return len(self.molecule_tuples)
+        return len(self.joined_smiles)
 
     def __getitem__(
         self, index: int
-    ) -> tuple[tuple[MolGraph, ...], torch.Tensor | None, list[float] | None]:
-        """Returns a MolGraph tuple and the corresponding features (or None) and reward (or None)."""
-        return self.mol_graphs_tuples[index], self.features[index], self.rewards[index]
+    ) -> tuple[str, torch.Tensor | None, list[float] | None]:
+        """Returns joined SMILES, optional descriptor features, and optional reward."""
+        return self.joined_smiles[index], self.features[index], self.rewards[index]
 
 
 def rl_chemprop_collate_fn(
-    data: list[tuple[tuple[MolGraph, ...], torch.Tensor | None, list[float] | None]]
-) -> tuple[tuple[list[BatchMolGraph], list[np.ndarray] | None], torch.Tensor | None]:
-    """Collates data into a batch for the RL Chemprop model.
+    data: list[tuple[str, torch.Tensor | None, list[float] | None]]
+) -> tuple[Any, torch.Tensor | None]:
+    """Collates data into a Chemprop v2 TrainingBatch and optional rewards tensor."""
+    from chemprop import data as chemprop_data
+    from chemprop import featurizers
 
-    :param data: A list of tuples of MolGraph tuples, features, and rewards.
-    :return: A tuple with a tuple containing a list of BatchMolGraph and features, and a tensor of rewards (or None).
-    """
-    # Get molecules, features, and rewards
-    mol_graph_tuples, features, rewards = zip(*data)
+    smiles_batch, features_batch, rewards_batch = zip(*data)
 
-    # Create BatchMolGraph from MolGraphs
-    batch_mol_graph = BatchMolGraph(
-        [
-            mol_graph
-            for mol_graph_tuple in mol_graph_tuples
-            for mol_graph in mol_graph_tuple
-        ]
-    )
-
-    # Create atom and bond scopes for BatchMolGraph based on mol_graph_tuples
-    a_scope, b_scope = [], []
-    n_atoms = n_bonds = 0
-    for mol_graph_tuple in mol_graph_tuples:
-        n_atoms_tuple = sum(mol_graph.n_atoms for mol_graph in mol_graph_tuple)
-        n_bonds_tuple = sum(mol_graph.n_bonds for mol_graph in mol_graph_tuple)
-
-        a_scope.append((n_atoms, n_atoms_tuple))
-        b_scope.append((n_bonds, n_bonds_tuple))
-
-        n_atoms += n_atoms_tuple
-        n_bonds += n_bonds_tuple
-
-    # Set BatchMolGraph atom and bond scopes
-    batch_mol_graph.a_scope = a_scope
-    batch_mol_graph.b_scope = b_scope
-
-    # Set up features
-    if features[0] is None:
-        features = None
+    if features_batch[0] is None:
+        x_d_batch = [None] * len(smiles_batch)
     else:
-        features = [feats.numpy() for feats in features]
+        x_d_batch = [features.detach().cpu().numpy() for features in features_batch]
 
-    # Set up rewards
-    if rewards[0] is None:
+    datapoints = [
+        chemprop_data.MoleculeDatapoint.from_smi(smiles, y=None, x_d=x_d)
+        for smiles, x_d in zip(smiles_batch, x_d_batch)
+    ]
+    dataset = chemprop_data.MoleculeDataset(
+        datapoints, featurizer=featurizers.SimpleMoleculeMolGraphFeaturizer()
+    )
+    dataloader = chemprop_data.build_dataloader(
+        dataset=dataset, batch_size=len(datapoints), shuffle=False, num_workers=0
+    )
+    batch_data = next(iter(dataloader))
+
+    if rewards_batch[0] is None:
         rewards = None
     else:
-        rewards = torch.tensor(rewards)
-
-    # Set up batch data for Chemprop
-    batch_data = ([batch_mol_graph], features)
+        rewards = torch.tensor(rewards_batch, dtype=torch.float32)
 
     return batch_data, rewards
 
@@ -981,7 +940,14 @@ class RLModelChemprop(RLModel):
             chemprop_version=chemprop_version,
         )
 
-    def build_model(self, prediction_type: RL_PREDICTION_TYPES) -> MoleculeModel:
+        version = "v2" if self.chemprop_version is None else str(self.chemprop_version).lower()
+        if version not in {"v2", "2", "2.2.2"}:
+            raise ValueError(
+                "RLModelChemprop now supports Chemprop v2 only. "
+                f"Received chemprop_version={self.chemprop_version!r}."
+            )
+
+    def build_model(self, prediction_type: RL_PREDICTION_TYPES) -> nn.Module:
         """Builds a model (for predicting an individual property) from scratch.
 
         :param prediction_type: The type of prediction made by the RL model, which determines the loss function.
@@ -1009,24 +975,26 @@ class RLModelChemprop(RLModel):
 
     def run_model(
         self,
-        model: MoleculeModel,
-        batch_data: tuple[list[BatchMolGraph], list[np.ndarray] | None],
+        model: nn.Module,
+        batch_data: Any,
     ) -> torch.Tensor:
-        """Makes predictions using the model.
+        """Makes predictions using a Chemprop v2 model."""
+        if hasattr(batch_data, "bmg"):
+            bmg = batch_data.bmg
+            v_d = batch_data.V_d
+            x_d = batch_data.X_d
+        else:
+            bmg, v_d, x_d, *_ = batch_data
 
-        :param model: A model.
-        :param batch_data: A tuple containing a list of BatchMolGraphs and features for the batch.
-        :return: A 1D tensor containing the model's prediction.
-        """
-        # Unpack batch data
-        batch_mol_graphs, features = batch_data
+        moved = bmg.to(self.device) if hasattr(bmg, "to") else bmg
+        if moved is not None:
+            bmg = moved
+        if v_d is not None:
+            v_d = v_d.to(self.device)
+        if x_d is not None:
+            x_d = x_d.to(self.device)
 
-        # Get predictions
-        predictions = model(batch=batch_mol_graphs, features_batch=features).squeeze(
-            dim=-1
-        )
-
-        # Return predictions
+        predictions = model(bmg, v_d, x_d).squeeze(dim=-1)
         return predictions
 
     def get_dataloader(

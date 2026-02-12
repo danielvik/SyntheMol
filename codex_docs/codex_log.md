@@ -283,3 +283,122 @@ To resume: rerun the conda creation (possibly with a longer timeout or `conda co
 ### Smoke test result
 - `Preds shape: (8,)`, `Preds min/max: 0.5030 / 0.5176`, followed by `OK`.
 
+
+## Bug report: RL Chemprop v2 ImportError (2026-02-11)
+
+### Summary
+Attempting to run SyntheMol with `--search_type rl --rl_model_type chemprop --chemprop_version v2` fails at import time with:
+`ImportError: cannot import name 'MoleculeModel' from 'chemprop.models'`.
+
+### Repro context
+Command used (shortened):
+`synthemol --search_type rl --score_types chemprop --score_model_paths <v2 .ckpt> --chemical_spaces real --building_blocks_paths <preds_csv> --building_blocks_score_columns pred_0 --rl_model_type chemprop --rl_prediction_types regression --chemprop_version v2`
+
+### Root cause
+`synthemol/generate/rl_models.py` still imports and uses Chemprop v1 classes:
+- `from chemprop.models import MoleculeModel`
+- `from chemprop.features import BatchMolGraph, MolGraph`
+These symbols do not exist in Chemprop v2, so import fails before any generation starts.
+Additionally, the command passed a predictions-only CSV as `--building_blocks_paths`, which is not a valid building-blocks file (missing required columns like `smiles` and `reagent_id`).
+
+### Impact
+Any attempt to use RL with Chemprop v2 as the RL model (`--rl_model_type chemprop`) fails immediately, regardless of the score model configuration.
+Users can still run:
+- MCTS with Chemprop v2 as the scorer, or
+- RL with `--rl_model_type mlp` (no Chemprop v1 dependency).
+
+### Anticipated fix
+Implement a Chemprop v2 execution path in `RLModelChemprop` and remove direct imports of v1-only classes when `chemprop_version == "v2"`:
+- Replace `MolGraph/BatchMolGraph` usage with Chemprop v2 data pipeline:
+  - `chemprop.data.MoleculeDatapoint`, `chemprop.data.MoleculeDataset`
+  - `chemprop.featurizers.SimpleMoleculeMolGraphFeaturizer()`
+  - `chemprop.data.build_dataloader(...)`
+- Update `rl_chemprop_collate_fn` and `RLChempropMoleculeDataset` to emit v2 batch tuples `(bmg, V_d, X_d, ...)`.
+- Keep the existing v1 path intact for backward compatibility; branch on `chemprop_version`.
+Also document that `--building_blocks_paths` must point to a full building-blocks CSV (original plus appended score column), not a standalone predictions file.
+
+## RL Chemprop v2 refactor follow-up (2026-02-12)
+
+### Scope executed
+Refactor focused on the RL execution path and command compatibility for Chemprop v2 only.
+
+### Code changes
+- `synthemol/generate/rl_models.py`
+  - Removed Chemprop v1-only top-level imports (`MoleculeModel`, `MolGraph`, `BatchMolGraph`).
+  - Replaced v1 MolGraph cache/dataset/collate with Chemprop v2 batching:
+    - tuples of molecules are represented as `".".join(molecule_tuple)` disconnected-fragment SMILES.
+    - collate now builds `MoleculeDatapoint` + `MoleculeDataset` + `build_dataloader` and returns a v2 batch.
+  - Updated `run_model` to consume v2 batch objects (`bmg`, `V_d`, `X_d`) and handle `BatchMolGraph.to()` in-place semantics safely.
+  - Added explicit guard that RL Chemprop path supports `chemprop_version=v2` only.
+  - Updated checkpoint directory resolution to accept both `.pt` and `.ckpt`.
+
+- `synthemol/generate/generate.py`
+  - Fixed RL args assembly bug where `features_size` caused a KeyError when `rl_model_fingerprint_type=None` (valid for RL-Chemprop).
+  - Added explicit validation that each building-blocks CSV contains required columns:
+    - SMILES column
+    - reagent ID column
+    - all requested score columns
+
+- `synthemol/models/chemprop_models.py`
+  - Added Chemprop v2 `.ckpt` loading via `MPNN.load_from_checkpoint`.
+  - Kept `.pt` loading via `MPNN.load_from_file`.
+  - Updated v2 single-molecule predict path to handle dataloader batch objects robustly and move data to model device safely.
+
+- `synthemol/generate/scorer.py`
+  - Updated directory model discovery for Chemprop scorer to include both `.pt` and `.ckpt`.
+
+### Command-path compatibility check for requested run
+Requested command:
+`synthemol --search_type rl --score_types chemprop --score_model_paths <...>.ckpt --chemical_spaces real --building_blocks_paths delqsar_real_preds.csv --building_blocks_score_columns pred_0 --save_dir runs/delqsar_real_rl --n_rollout 10 --rl_model_type chemprop --rl_prediction_types regression --chemprop_version v2`
+
+Checks performed:
+- `delqsar_real_preds.csv` columns verified: `smiles`, `reagent_id`, `pred_0` (valid for this path).
+- RL module import verified in `synthemol-v2` without v1 symbol errors.
+- Scorer checkpoint load verified from the provided `.ckpt` path (`chemprop_load(..., v2)` returns `MPNN`).
+- RL Chemprop v2 dataloader + forward pass sanity check verified (`batch_ok (2, 1) (2,)`).
+- Existing v2 smoke test still passes: `scripts/tests/smoke_chemprop_v2.py` returns `OK`.
+
+### Notes on full end-to-end invocation
+- Full dataset command was launched multiple times while validating; those long-running processes did not stream logs via `conda run` and were still active.
+- Stopping them required explicit process-kill permission, which was not granted in-session.
+- As a result, full end-to-end completion output for the exact command was not captured in this pass, but all targeted compatibility checks for the executed code path now pass.
+
+
+## Runtime logging improvements (2026-02-12)
+
+Added structured runtime progress logs for generation runs.
+
+### What changed
+- `Generator` now supports text status logging with timestamps:
+  - new args: `status_log_path`, `status_log_frequency`
+  - emits start/end of generation blocks
+  - emits rollout summaries (score, unique molecules, rollout time, similarity, RL temperature)
+  - emits RL train-cycle start/end markers with dataset sizes and train time
+- `generate()` now passes:
+  - `status_log_path=save_dir / "run.log"`
+  - `status_log_frequency` (new CLI argument, default `10`)
+
+### Practical effect
+- Each run now creates `run.log` in the run directory.
+- Long RL runs have human-readable progress and training checkpoints for debugging and postmortem analysis.
+
+
+## SLURM run script added (2026-02-12)
+
+Added a cluster submission script for the Chemprop v2 RL run:
+- `scripts/slurm/run_synthemol_delqsar_rl.sh`
+
+### What it does
+- Activates `conda` env `synthemol-v2`.
+- Executes the Chemprop v2 RL `synthemol` command used in this migration.
+- Uses env-overridable defaults for key inputs (`SCORE_MODEL_PATH`, `BUILDING_BLOCKS_PATH`, `BUILDING_BLOCKS_SCORE_COLUMN`, `N_ROLLOUT`, etc.).
+- Writes outputs to a job-specific run directory under `runs/` by default.
+- Archives job artifacts and script copy to run output.
+- Supports runtime progress logging via `--status_log_frequency` (writes `run.log`).
+
+### Submit
+- `sbatch scripts/slurm/run_synthemol_delqsar_rl.sh`
+
+### Example override
+- `sbatch --export=ALL,N_ROLLOUT=100,STATUS_LOG_FREQUENCY=5 scripts/slurm/run_synthemol_delqsar_rl.sh`
+

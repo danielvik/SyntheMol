@@ -3,6 +3,7 @@ import itertools
 import pickle
 import time
 from collections import Counter
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -56,6 +57,8 @@ class Generator:
         wandb_log: bool = False,
         wavelength_color: str | None = None,
         log_path: Path | None = None,
+        status_log_path: Path | None = None,
+        status_log_frequency: int = 1,
     ) -> None:
         """Creates the Generator.
 
@@ -94,6 +97,8 @@ class Generator:
             since it limits the potential choices of building blocks.
         :param wandb_log: Whether to log results to Weights & Biases.
         :param log_path: Path to a PKL file to save logs to. If None, logs are not saved locally.
+        :param status_log_path: Path to a text log file for runtime progress updates.
+        :param status_log_frequency: Number of rollouts between status log entries.
         """
         self.search_type = search_type
         self.chemical_space_to_building_block_smiles_to_id = (
@@ -121,9 +126,24 @@ class Generator:
         self.min_score_weight = min_score_weight
         self.wandb_log = wandb_log
         self.log_path = log_path
+        self.status_log_path = status_log_path
+        self.status_log_frequency = status_log_frequency
 
         # Set up list of rollout stats
         self.rollout_stats_record: list[dict[str, Any]] = []
+
+        if self.status_log_frequency < 1:
+            raise ValueError("status_log_frequency must be at least 1.")
+
+        if self.status_log_path is not None:
+            self.status_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.status_log_path, "w") as f:
+                f.write(
+                    f"[{datetime.now().isoformat()}] "
+                    f"Initialized generator search_type={self.search_type} "
+                    f"max_reactions={self.max_reactions} "
+                    f"rl_train_frequency={self.rl_train_frequency}\n"
+                )
 
         # Check that the search type is valid
         if (self.search_type == "rl") != (self.rl_model is not None):
@@ -187,6 +207,15 @@ class Generator:
 
         # Set up rolling average successes for score weight adjustment
         self.rolling_average_success_rate = np.zeros(self.score_weights.num_weights)
+
+    def _log_status(self, message: str) -> None:
+        """Logs a status message to stdout and optional text log file."""
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        status_line = f"[{timestamp}] {message}"
+        print(status_line)
+        if self.status_log_path is not None:
+            with open(self.status_log_path, "a") as f:
+                f.write(status_line + "\n")
 
     def get_next_building_blocks(self, molecules: tuple[str]) -> list[str]:
         """Get the next building blocks that can be added to the given molecules.
@@ -742,6 +771,11 @@ class Generator:
         # Set up rollout bounds
         rollout_start = self.rollout_num + 1
         rollout_end = rollout_start + n_rollout
+        generation_start_time = time.time()
+        self._log_status(
+            f"Starting generation block rollouts={n_rollout} "
+            f"range=[{rollout_start},{rollout_end - 1}]"
+        )
 
         # Run the generation algorithm for the specified number of rollouts
         for rollout_num in trange(rollout_start, rollout_end):
@@ -809,6 +843,10 @@ class Generator:
 
                 # Train and evaluate RL model
                 if rollout_num % self.rl_train_frequency == 0:
+                    self._log_status(
+                        f"Rollout {rollout_num}: starting RL train cycle "
+                        f"(test_size={self.rl_model.test_size}, train_size={self.rl_model.train_size})"
+                    )
                     # Reset RL scores since RL model is being updated
                     self.molecules_to_rl_score = {}
 
@@ -831,6 +869,11 @@ class Generator:
                     rollout_stats |= self.rl_model.evaluate(split="train")
                     rollout_stats["RL Train Eval Time"] = time.time() - start_time
                     rollout_stats["RL Train Examples"] = self.rl_model.train_size
+                    self._log_status(
+                        f"Rollout {rollout_num}: completed RL train cycle "
+                        f"(train_examples={self.rl_model.train_size}, "
+                        f"train_time={rollout_stats['RL Train Time']:.2f}s)"
+                    )
 
             # Add rollout stats to record
             self.rollout_stats_record.append(rollout_stats)
@@ -839,10 +882,31 @@ class Generator:
             if self.wandb_log:
                 wandb.log(rollout_stats)
 
+            if (
+                rollout_num == rollout_start
+                or rollout_num == rollout_end - 1
+                or rollout_num % self.status_log_frequency == 0
+            ):
+                summary = (
+                    f"Rollout {rollout_num}: "
+                    f"score={rollout_stats['Rollout Score']:.6f}, "
+                    f"unique_molecules={rollout_stats['Unique Molecules']}, "
+                    f"rollout_time={rollout_stats['Rollout Time']:.2f}s, "
+                    f"similarity={rollout_stats['Rollout Similarity']:.4f}"
+                )
+                if self.search_type == "rl":
+                    summary += f", temperature={rollout_stats.get('RL Temperature', float('nan')):.4f}"
+                self._log_status(summary)
+
         # Log rollout stats to file
         if self.log_path is not None:
             with open(self.log_path, "wb") as f:
                 pickle.dump(self.rollout_stats_record, f)
+
+        self._log_status(
+            f"Finished generation block rollouts={n_rollout} "
+            f"elapsed={time.time() - generation_start_time:.2f}s"
+        )
 
         # Get all the Nodes representing fully constructed molecules within these rollouts sorted by score
         nodes = self.get_full_molecule_nodes(
