@@ -417,3 +417,76 @@ Updated `scripts/slurm/run_synthemol_delqsar_rl.sh` to run on GPU.
 - Script syntax check passed:
   - `bash -n scripts/slurm/run_synthemol_delqsar_rl.sh`
 
+
+## RL performance refactor for GPU utilization (2026-02-12)
+
+### Motivation
+GPU utilization was very low (~2%), indicating the RL path was CPU-bound.
+
+### Refactor implemented
+- `synthemol/generate/rl_models.py`
+  - Reworked `RLChempropMoleculeDataset` to precompute Chemprop v2 `Datum` objects once per dataloader build.
+  - Updated `rl_chemprop_collate_fn` to use `chemprop.data.collate.collate_batch` directly on precomputed datums.
+  - Removed per-batch creation of `MoleculeDatapoint`/`MoleculeDataset`/`build_dataloader` inside collate.
+  - Added timing metrics in `RLModel`:
+    - `last_train_timing` with dataloader/forward/backward/total times and batch count.
+    - `last_predict_timing` with dataloader/forward/total times and batch count.
+
+- `synthemol/generate/generator.py`
+  - Added RL timing fields to rollout stats:
+    - `RL Predict Data Time`, `RL Predict Forward Time`, `RL Predict Total Time`
+    - `RL Train Data Time`, `RL Train Forward Time`, `RL Train Backward Time`, `RL Train Batches`
+  - Included RL timing snippets in periodic run status summaries (`run.log` + stdout).
+
+### Validation
+- Syntax checks passed:
+  - `python -m py_compile synthemol/generate/rl_models.py synthemol/generate/generator.py`
+- RL Chemprop v2 sanity check passed:
+  - dataloader + forward pass shape check (`batch_ok (2, 1) (2,)`).
+- Existing Chemprop v2 smoke test still passes:
+  - `scripts/tests/smoke_chemprop_v2.py` prints `OK`.
+
+### Expected effect
+- Reduced CPU overhead during RL inference/training batches.
+- Improved end-to-end throughput and better (though still not maximal) GPU utilization.
+- Clear timing observability in rollout stats and `run.log` for further bottleneck tuning.
+
+
+## QED/cLogP building-block integration (2026-02-13)
+
+### Objective
+Add drug-likeness-relevant scores (`qed`, `clogp`) to the REAL building-block input and wire them into RL scoring alongside Chemprop.
+
+### Changes made
+- Added preprocessing utility:
+  - `scripts/data/add_qed_clogp.py`
+  - Reads a CSV with `smiles` and writes `qed` + `clogp` columns computed via RDKit.
+
+- Generated new building-block score file:
+  - Input: `delqsar_real_preds.csv`
+  - Output: `delqsar_real_preds_qed_clogp.csv`
+  - Output columns: `smiles`, `reagent_id`, `pred_0`, `qed`, `clogp`
+
+- Updated SLURM run scripts to use 3 score objectives:
+  - `scripts/slurm/run_synthemol_delqsar_rl.sh`
+  - `scripts/slurm/run_synthemol_delqsar_rl_fast.sh`
+  - `scripts/slurm/run_synthemol_delqsar_rl_quality.sh`
+
+### New scoring configuration in SLURM scripts
+- `--score_types chemprop qed clogp`
+- `--score_model_paths "${SCORE_MODEL_PATH}" None None`
+- `--building_blocks_paths /compchem/arc/users/dvik/repos/SyntheMol/delqsar_real_preds_qed_clogp.csv`
+- `--building_blocks_score_columns pred_0 qed clogp`
+
+Environment variable defaults were expanded accordingly:
+- `BUILDING_BLOCKS_CHEMPROP_COLUMN=pred_0`
+- `BUILDING_BLOCKS_QED_COLUMN=qed`
+- `BUILDING_BLOCKS_CLOGP_COLUMN=clogp`
+
+### Validation performed
+- `delqsar_real_preds_qed_clogp.csv` created successfully.
+- Quick checks:
+  - rows: `139493`
+  - `qed` missing values: `0`
+  - `clogp` missing values: `0`
+- Bash syntax checks passed for all three updated SLURM scripts.

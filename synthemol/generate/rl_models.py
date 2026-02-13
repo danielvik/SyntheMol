@@ -1,6 +1,7 @@
 """Contains reinforcement learning models for use in generating molecules."""
 from abc import ABC, abstractmethod
 from pathlib import Path
+import time
 from typing import Any, Literal
 
 import numpy as np
@@ -87,6 +88,8 @@ class RLModel(ABC):
         self.train_target_nodes: list[Node] = []
         self.test_source_nodes: list[Node] = []
         self.test_target_nodes: list[Node] = []
+        self.last_train_timing: dict[str, float] = {}
+        self.last_predict_timing: dict[str, float] = {}
 
         self.smiles_to_features: dict[str, torch.Tensor] = {}
 
@@ -259,17 +262,25 @@ class RLModel(ABC):
         # Set models to train mode
         self.train_mode()
 
+        train_start = time.time()
+
         # Get dataloader
+        dataloader_start = time.time()
         dataloader = self.get_dataloader(
             molecule_tuples=[node.molecules for node in self.train_source_nodes],
             rewards=[node.individual_scores for node in self.train_target_nodes],
             shuffle=True,
         )
+        dataloader_time = time.time() - dataloader_start
+        forward_time = 0.0
+        backward_time = 0.0
+        num_batches = 0
 
         # Loop over epochs
         for _ in trange(self.num_epochs, desc="Training RL model", leave=False):
             # Loop over batches of molecule features and rewards
             for batch_data, batch_rewards in dataloader:
+                num_batches += 1
                 # Move batch rewards to device
                 batch_rewards = batch_rewards.to(self.device)
 
@@ -278,7 +289,9 @@ class RLModel(ABC):
                     zip(self.models, self.optimizers)
                 ):
                     # Make predictions
+                    forward_start = time.time()
                     predictions = self.run_model(model=model, batch_data=batch_data)
+                    forward_time += time.time() - forward_start
 
                     # Compute loss
                     loss = self.loss_fns[model_index](
@@ -286,9 +299,20 @@ class RLModel(ABC):
                     )
 
                     # Backpropagate
+                    backward_start = time.time()
                     model.zero_grad()
                     loss.backward()
                     optimizer.step()
+                    backward_time += time.time() - backward_start
+
+        self.last_train_timing = {
+            "dataloader_seconds": dataloader_time,
+            "forward_seconds": forward_time,
+            "backward_seconds": backward_time,
+            "total_seconds": time.time() - train_start,
+            "num_batches": float(num_batches),
+            "num_models": float(len(self.models)),
+        }
 
     def evaluate(self, split: Literal["train", "test"]) -> dict[str, float]:
         """Evaluates the model on the train or test set.
@@ -438,26 +462,42 @@ class RLModel(ABC):
         # Set models to eval mode
         self.eval_mode()
 
+        predict_start = time.time()
+
         # Get dataloader
+        dataloader_start = time.time()
         dataloader = self.get_dataloader(molecule_tuples=molecule_tuples, shuffle=False)
+        dataloader_time = time.time() - dataloader_start
 
         # Loop over batches of molecules and make reward predictions
         predictions = []
+        forward_time = 0.0
+        num_batches = 0
 
         with torch.no_grad():
             for batch_data, _ in tqdm(
                 dataloader, desc="Predicting RL model", leave=False
             ):
+                num_batches += 1
                 # Predict rewards
+                forward_start = time.time()
                 batch_preds = self.run_models(
                     batch_data=batch_data
                 )  # (num_molecules, num_properties)
+                forward_time += time.time() - forward_start
 
                 # Add predictions to list
                 predictions.append(batch_preds.cpu())
 
         # Concatenate predictions
         predictions = torch.cat(predictions, dim=0)  # (num_molecules, num_properties)
+
+        self.last_predict_timing = {
+            "dataloader_seconds": dataloader_time,
+            "forward_seconds": forward_time,
+            "total_seconds": time.time() - predict_start,
+            "num_batches": float(num_batches),
+        }
 
         return predictions
 
@@ -837,46 +877,48 @@ class RLChempropMoleculeDataset(torch.utils.data.Dataset):
         A tuple of source molecules is represented as a disconnected multi-fragment
         SMILES string joined by '.' so Chemprop featurization can treat it as one sample.
         """
-        self.joined_smiles = [".".join(molecule_tuple) for molecule_tuple in molecule_tuples]
-        self.features = [None] * len(molecule_tuples) if features is None else features
+        from chemprop import data as chemprop_data
+        from chemprop import featurizers
+
         self.rewards = [None] * len(molecule_tuples) if rewards is None else rewards
+        joined_smiles = [".".join(molecule_tuple) for molecule_tuple in molecule_tuples]
+
+        if features is None:
+            x_d_values = [None] * len(molecule_tuples)
+        else:
+            x_d_values = [
+                feat.detach().cpu().numpy().astype(np.float32) for feat in features
+            ]
+
+        datapoints = [
+            chemprop_data.MoleculeDatapoint.from_smi(smiles, y=None, x_d=x_d)
+            for smiles, x_d in zip(joined_smiles, x_d_values)
+        ]
+        chemprop_dataset = chemprop_data.MoleculeDataset(
+            datapoints, featurizer=featurizers.SimpleMoleculeMolGraphFeaturizer()
+        )
+        # Materialize Datum objects once per dataloader build to avoid repeated featurization in collate.
+        self.datums = list(chemprop_dataset)
 
     def __len__(self) -> int:
         """Returns the number of tuples of molecules."""
-        return len(self.joined_smiles)
+        return len(self.datums)
 
     def __getitem__(
         self, index: int
-    ) -> tuple[str, torch.Tensor | None, list[float] | None]:
-        """Returns joined SMILES, optional descriptor features, and optional reward."""
-        return self.joined_smiles[index], self.features[index], self.rewards[index]
+    ) -> tuple[Any, list[float] | None]:
+        """Returns a pre-featurized Chemprop Datum and optional reward."""
+        return self.datums[index], self.rewards[index]
 
 
 def rl_chemprop_collate_fn(
-    data: list[tuple[str, torch.Tensor | None, list[float] | None]]
+    data: list[tuple[Any, list[float] | None]]
 ) -> tuple[Any, torch.Tensor | None]:
-    """Collates data into a Chemprop v2 TrainingBatch and optional rewards tensor."""
-    from chemprop import data as chemprop_data
-    from chemprop import featurizers
+    """Collates pre-featurized Datum objects into a Chemprop v2 TrainingBatch."""
+    from chemprop.data.collate import collate_batch
 
-    smiles_batch, features_batch, rewards_batch = zip(*data)
-
-    if features_batch[0] is None:
-        x_d_batch = [None] * len(smiles_batch)
-    else:
-        x_d_batch = [features.detach().cpu().numpy() for features in features_batch]
-
-    datapoints = [
-        chemprop_data.MoleculeDatapoint.from_smi(smiles, y=None, x_d=x_d)
-        for smiles, x_d in zip(smiles_batch, x_d_batch)
-    ]
-    dataset = chemprop_data.MoleculeDataset(
-        datapoints, featurizer=featurizers.SimpleMoleculeMolGraphFeaturizer()
-    )
-    dataloader = chemprop_data.build_dataloader(
-        dataset=dataset, batch_size=len(datapoints), shuffle=False, num_workers=0
-    )
-    batch_data = next(iter(dataloader))
+    datum_batch, rewards_batch = zip(*data)
+    batch_data = collate_batch(datum_batch)
 
     if rewards_batch[0] is None:
         rewards = None

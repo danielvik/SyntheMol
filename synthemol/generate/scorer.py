@@ -288,7 +288,7 @@ def create_scorer(
             raise ValueError("QED does not use fingerprints.")
 
         scorer = QEDScorer()
-    if score_type == "clogp":
+    elif score_type == "clogp":
         if model_path is not None:
             raise ValueError("CLogP does not use a model path.")
 

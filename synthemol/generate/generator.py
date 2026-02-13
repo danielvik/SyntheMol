@@ -834,6 +834,18 @@ class Generator:
 
             # RL-specific updates and training
             if self.search_type == "rl":
+                # Include latest RL inference timings (from scoring/policy evaluation during rollout)
+                if self.rl_model.last_predict_timing:
+                    rollout_stats["RL Predict Data Time"] = self.rl_model.last_predict_timing.get(
+                        "dataloader_seconds", 0.0
+                    )
+                    rollout_stats["RL Predict Forward Time"] = self.rl_model.last_predict_timing.get(
+                        "forward_seconds", 0.0
+                    )
+                    rollout_stats["RL Predict Total Time"] = self.rl_model.last_predict_timing.get(
+                        "total_seconds", 0.0
+                    )
+
                 # Optionally, update temperature based on similarity of new molecules to previous molecules
                 if self.rl_temperature_similarity_target is not None:
                     self.update_temperature(new_similarity=new_similarity)
@@ -863,6 +875,19 @@ class Generator:
                     start_time = time.time()
                     self.rl_model.train()
                     rollout_stats["RL Train Time"] = time.time() - start_time
+                    if self.rl_model.last_train_timing:
+                        rollout_stats["RL Train Data Time"] = self.rl_model.last_train_timing.get(
+                            "dataloader_seconds", 0.0
+                        )
+                        rollout_stats["RL Train Forward Time"] = self.rl_model.last_train_timing.get(
+                            "forward_seconds", 0.0
+                        )
+                        rollout_stats["RL Train Backward Time"] = self.rl_model.last_train_timing.get(
+                            "backward_seconds", 0.0
+                        )
+                        rollout_stats["RL Train Batches"] = self.rl_model.last_train_timing.get(
+                            "num_batches", 0.0
+                        )
 
                     # Evaluate model on train set
                     start_time = time.time()
@@ -896,6 +921,14 @@ class Generator:
                 )
                 if self.search_type == "rl":
                     summary += f", temperature={rollout_stats.get('RL Temperature', float('nan')):.4f}"
+                    if "RL Predict Total Time" in rollout_stats:
+                        summary += (
+                            f", rl_predict_total={rollout_stats['RL Predict Total Time']:.2f}s"
+                        )
+                    if "RL Train Time" in rollout_stats:
+                        summary += (
+                            f", rl_train_total={rollout_stats['RL Train Time']:.2f}s"
+                        )
                 self._log_status(summary)
 
         # Log rollout stats to file
